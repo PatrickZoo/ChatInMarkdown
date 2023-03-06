@@ -22,7 +22,7 @@ from typing import List, Optional, Union
 
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "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"
 
 HTTP_PROXY_SERVER = "127.0.0.1"
 HTTP_PROXY_PORT = 10809
@@ -30,6 +30,8 @@ HTTP_PROXY_PORT = 10809
 OUTPUT_FILE = "chatgpt.md"
 LOG_FILE = "/tmp/chat.log"
 
+
+IGNORE_QUESTION = ["请另起一行输入问题:", "Runtime Message"]
 
 def file_modified(filepath: str) -> float:
     st_mtime = os.stat(filepath).st_mtime
@@ -55,6 +57,27 @@ def get_time() -> str:
     return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
+def clean_question(question: str) -> str:
+    """
+    对获取的问题做清洗
+    """
+    if question is None:
+        return None
+
+    if question.isspace() or question == "":
+        return None
+    
+    if "Runtime Message" in question:
+        return None
+    
+    if "请另起一行输入问题:" in question:
+        question = re.sub(r'.*请另起一行输入问题:(.*)', r'\1', question).strip()
+        if question == "":
+            return None
+    
+    return question
+
+
 def get_question(input_file: str) -> str:
     with open(input_file, 'rb') as f:
         file_lines = len(f.readlines())
@@ -73,8 +96,12 @@ def get_question(input_file: str) -> str:
         # 移动文件指针到文件末尾，并倒退两个 bytes
         f.seek(-2, os.SEEK_END)
         last_line, pos = reverse_readline(f)
-        if last_line and "```" in last_line:
-            return read_codes(f)
+        if last_line:
+            if "```" in last_line:
+                return read_code_block(f, "```")
+            elif last_line == "$$":
+                return read_code_block(f, "$$")
+
         return last_line
 
 
@@ -112,29 +139,32 @@ def reverse_readline(f: io.BufferedReader) -> List[Union[str, int]]:
         f.seek(pos - 2)
 
 
-def read_codes(f: io.BufferedReader) -> str:
+def read_code_block(f: io.BufferedReader, block_type: str) -> str:
     """
     读取代码块类型的问题
     """
     lines = list()
     quotes_pair = 0
 
-    # 匹配到一对 markdown 代码块标记 ``` 后停止
+    # 匹配到一对 markdown 代码块标记 ``` ``` 或数学公式标记 $$ $$ 后停止
     while quotes_pair < 2:
         # 读取最后一行，并追加到list中
         last_line, pos = reverse_readline(f)
         if last_line is None:
-            raise ValueError("markdown 代码块标记符 ``` 不匹配")
+            raise ValueError(f"markdown 代码块标记符不匹配")
 
         lines.append(last_line)
-        if "```" in last_line:
+        if block_type in last_line:
             quotes_pair += 1
         f.seek(pos - 2)
 
     # 再读取代码块上一行内容作为 QUESTION
     last_line, pos = reverse_readline(f)
-    if last_line is not None:
+
+    last_line = clean_question(last_line)
+    if last_line:
         lines.append(last_line)
+
     # 对 list 中内容逆序后给每一行添加换行符，组合成字符串
     lines.reverse()
     return '\n'.join(lines)
@@ -283,21 +313,12 @@ def monitor_loop(output_file: str):
             logging.debug(e)
             append_msg_to_file(f"{repr(e)}", output_file)
 
-        if question is None or question.isspace() or question == "":
-            logging.warning("请输入问题")
+        question = clean_question(question)
+        if not question:
+            logging.debug("Blank question or runtime message. Ignored")
             continue
 
-        if "Runtime Message" in question:
-            logging.debug("ignore runtime message")
-            continue
 
-        if question.startswith("请另起一行输入问题:"):
-            # 用户可能会在 "请另起一行输入问题:" 之后直接输入问题，截断字符串并去除头尾空格后判断一下
-            question = re.sub(r'.*请另起一行输入问题:(.*)', r'\1', question).strip()
-            if question == "":
-                logging.debug(f"ignore blank question")
-                continue
-        
         if question == ":clear":
             logging.debug(f"clear file: {output_file}")
             clear_file(output_file)

@@ -21,6 +21,8 @@ import logging.config
 from typing import List, Optional, Union
 
 
+
+
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "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"
 

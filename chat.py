@@ -20,33 +20,49 @@ import logging.config
 
 from typing import List, Optional, Union
 
-
+# 读取本地配置文件内容
+with open('./config/config.json', 'r', encoding="utf-8") as f:
+    config = json.load(f)
 
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "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"
-
-HTTP_PROXY_SERVER = "127.0.0.1"
-HTTP_PROXY_PORT = 10809
-
-OUTPUT_FILE = "chatgpt.md"
-LOG_FILE = "/tmp/chat.log"
-
+# 获取配置文件内容
+OPENAI_API_KEY = config['OPENAI_API_KEY']
+OUTPUT_FILE = config['OUTPUT_FILE']
+LOG_FILE = config['LOG_FILE']
+HISTORY_DIR = "./history"
+HTTP_PROXY_SERVER = config['proxy_host']  # https代理地址
+HTTP_PROXY_PORT = config['proxy_port']  # https代理端口
 
 IGNORE_QUESTION = ["请另起一行输入问题:", "Runtime Message"]
-
 def file_modified(filepath: str) -> float:
     st_mtime = os.stat(filepath).st_mtime
     return st_mtime
 
 
-def clear_file(filename: str):
-    with open(filename, 'w') as _f:
-        _f.write("请另起一行输入问题:")
+def clear_file(filepath: str):
+    with open(filepath, 'w', encoding="utf-8") as _f:
+        _f.write("\n请另起一行输入问题:\n")
+
+
+"""
+输入参数：
+filepath：需要操作的文件地址
+newfilename：保存的文件名。默认值为系统当前时间。格式为：年_月_日_时_分
+"""
+
+
+def save_file(filepath: str, newfilename: str = time.strftime("%Y_%m_%d_%H_%M", time.localtime())):
+    newpath = os.path.join(HISTORY_DIR, newfilename)
+    # 重命名文件并移动到新的地址上
+    os.rename(filepath, newpath)
+    with open(filepath, 'w', encoding="utf-8") as _f:
+        _f.write("\n请另起一行输入问题:\n")
+
 
 def proxy_test() -> bool:
     conn = http.client.HTTPSConnection(HTTP_PROXY_SERVER, HTTP_PROXY_PORT, context=ssl._create_unverified_context())
-    conn.set_tunnel("google.com") # 设置需要访问的目标服务器
+    conn.set_tunnel("google.com")  # 设置需要访问的目标服务器
     try:
         conn.request("GET", "/")
         res = conn.getresponse()
@@ -68,15 +84,15 @@ def clean_question(question: str) -> str:
 
     if question.isspace() or question == "":
         return None
-    
+
     if "Runtime Message" in question:
         return None
-    
+
     if "请另起一行输入问题:" in question:
         question = re.sub(r'.*请另起一行输入问题:(.*)', r'\1', question).strip()
         if question == "":
             return None
-    
+
     return question
 
 
@@ -89,8 +105,8 @@ def get_question(input_file: str) -> str:
             return None
         # 如果文件只有一行
         if (file_lines == 1):
-            f.seek(0)    # 将文件指针移到文件开始处
-            first_line = f.readline().decode()
+            f.seek(0)  # 将文件指针移到文件开始处
+            first_line = f.readline()
             # 删除换行符、零宽字符
             first_line = re.sub(r"([\u200B-\u200F]|\t|\n)", repl="", string=first_line)
             return first_line if not first_line.isspace() and first_line != "" else None
@@ -105,7 +121,6 @@ def get_question(input_file: str) -> str:
                 return read_code_block(f, "$$")
 
         return last_line
-
 
 
 def reverse_readline(f: io.BufferedReader) -> List[Union[str, int]]:
@@ -124,7 +139,7 @@ def reverse_readline(f: io.BufferedReader) -> List[Union[str, int]]:
             if f.tell() < 2:
                 return None, f.tell()
             f.seek(-2, os.SEEK_CUR)
-        
+
         # 记录当前指针位置(行首)
         pos = f.tell()
         last_line = f.readline().decode()
@@ -197,10 +212,10 @@ def ask_chatgpt(question: str) -> Optional[str]:
         # conn.set_tunnel("127.0.0.1", 10808)
         # 创建代理连接对象
         conn = http.client.HTTPSConnection(HTTP_PROXY_SERVER, HTTP_PROXY_PORT, context=ssl._create_unverified_context())
-        conn.set_tunnel("api.openai.com") # 设置需要访问的目标服务器
+        conn.set_tunnel("api.openai.com")  # 设置需要访问的目标服务器
         conn.request("POST", "/v1/chat/completions", body=payload, headers=_headers)
         res = conn.getresponse()
-        _response = res.read().decode("utf-8")
+        _response = res.read().decode()
         _response = json.loads(_response)
 
         if "error" in _response:
@@ -210,24 +225,24 @@ def ask_chatgpt(question: str) -> Optional[str]:
         # _response = requests.post(OPENAI_URL, headers=_headers, data=payload, proxies=PROXIES)
         # _response = _response.json()
         _answer = _response["choices"].pop()["message"]["content"]
+
         usage_tokens = _response["usage"]["total_tokens"]
-        return f"{_answer}\n**本次API调用共消耗 {usage_tokens} tokens.**" 
+        return f"{_answer}\n**本次API调用共消耗 {usage_tokens} tokens.**"
     except Exception as e:
         logging.debug(traceback.format_exc())
         return repr(e)
-    
 
 
 def append_answer(answer: str, output_file: str):
-    with open(output_file, 'a') as f:
+    with open(output_file, 'a', encoding="utf-8") as f:
         f.write(f"\n==ANSWER ({get_time()})==\n")
         f.write(f"{answer}\n")
-        f.write("\n请另起一行输入问题:\n\n")
+        f.write("\n请另起一行输入问题:\n")
         logging.info(f"运行成功，请在 {OUTPUT_FILE} 查看结果。")
 
 
 def append_msg_to_file(msg: str, output_file: str):
-    with open(output_file, 'a') as f:
+    with open(output_file, 'a', encoding="utf-8") as f:
         f.write(f"\n==Runtime Message ({get_time()})=={msg}")
         logging.debug(f"{msg.strip()}")
 
@@ -259,7 +274,7 @@ def configure_logging():
                 "filename": LOG_FILE,
                 "maxBytes": 1024000,
                 "backupCount": 10,
-                "encoding": "utf8"
+                "encoding": "utf-8"
             }
 
         },
@@ -278,9 +293,7 @@ def configure_logging():
     logging.config.dictConfig(logging_config)
 
 
-
 def with_chat(question: str, output_file: str):
-    
     if question is None or question.isspace() or question == "":
         logging.warning("请输入问题")
         return False
@@ -297,7 +310,6 @@ def with_chat(question: str, output_file: str):
         append_answer(answer, output_file)
 
 
-
 def monitor_loop(output_file: str):
     last_modified = file_modified(output_file)
 
@@ -306,7 +318,7 @@ def monitor_loop(output_file: str):
         current_modified = file_modified(output_file)
         if current_modified <= last_modified:
             continue
-        
+
         last_modified = current_modified
         question = None
         try:
@@ -320,18 +332,31 @@ def monitor_loop(output_file: str):
             logging.debug("Blank question or runtime message. Ignored")
             continue
 
-
-        if question == ":clear":
+        if question == ":clear" or question=="：clear":
             logging.debug(f"clear file: {output_file}")
             clear_file(output_file)
             continue
-
+        # 有参数
+        if question.split()[0] == ":save" or question.split()[0]=="：save":
+            # 没有指定文件名
+            if len(question.split()) == 1:
+                save_file(output_file)
+            elif len(question.split()) == 2:
+                newfile_name = question.split()[1]
+                save_file(output_file, newfile_name)
+            else:
+                logging.error(f"save file error")
+                continue
+            logging.debug(f"save file: {output_file}")
+            continue
 
         logging.debug("File modified!")
         with_chat(question, output_file)
 
 
 def main():
+    if not os.path.exists(HISTORY_DIR):
+        os.makedirs(HISTORY_DIR)
     if not os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, 'w') as f:
             f.write(f"Created file by {os.path.abspath(__file__)} in {get_time()}")
@@ -343,16 +368,11 @@ def main():
         append_msg_to_file("proxy 无法连接，请检查代理连接后重试", OUTPUT_FILE)
         return False
 
-    append_msg_to_file(f"proxy 连接正常: http://{HTTP_PROXY_SERVER}:{HTTP_PROXY_PORT}\n请另起一行输入问题:", OUTPUT_FILE)
-
+    append_msg_to_file(f"proxy 连接正常: http://{HTTP_PROXY_SERVER}:{HTTP_PROXY_PORT}\n请另起一行输入问题:\n",
+                       OUTPUT_FILE)
     logging.warning(f"开始循环监听 {os.path.abspath(OUTPUT_FILE)} 文件")
     monitor_loop(OUTPUT_FILE)
-
-
-
 
 if __name__ == '__main__':
     main()
     # test()
-
-

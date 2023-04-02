@@ -1,7 +1,8 @@
 {
-  "OPENAI_API_KEY": "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",
-  "OUTPUT_FILE": "./chatgpt.md",
-  "LOG_FILE": "./chat.log",
-  "PROXY_HOST": "127.0.0.1",
-  "PROXY_PORT": 10809
+  "openai_api_key": "sk-AWfhPAt4FwNFJ6MKquY5q9FeNi9pxpxuW",
+  "output_file": "./chatgpt.md",
+  "history_path": "./history",
+  "log_file": "./chat.log",
+  "log_level": "debug",
+  "proxy": "127.0.0.1:10809"
 }

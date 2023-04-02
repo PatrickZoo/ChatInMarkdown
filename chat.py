@@ -2,12 +2,13 @@
 # @Author      : Daxing Zheng
 # @Email       : laiguanqixi@gmail.com
 # @Author      : Jun Zhou
-# @Email       :
+# @Email       : zj1355097307@outlook.com
 # @File        : chat.py
 # @Datetime    : 2023-03-02 09:23:19
 # @Github      : https://github.com/PatrickZoo/ChatInMarkdown
 # @Description :
 
+import argparse
 import datetime
 import http.client
 import io
@@ -20,27 +21,59 @@ import ssl
 import time
 import traceback
 from typing import List, Optional, Union
-import uuid
+from urllib.parse import urlparse
 
 
-
-# 读取本地配置文件内容
-with open('./config/config.json', 'r', encoding="utf-8") as f:
-    config = json.load(f)
-
-
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-# 获取配置文件内容
-OPENAI_API_KEY = config['OPENAI_API_KEY']
-OUTPUT_FILE = config['OUTPUT_FILE']
-LOG_FILE = config['LOG_FILE']
-HISTORY_DIR = "./history"
-HTTP_PROXY_SERVER = config['PROXY_HOST']  # https代理地址
-HTTP_PROXY_PORT = config['PROXY_PORT']  # https代理端口
+# OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 IGNORE_QUESTION = ["请另起一行输入问题:", "Runtime Message"]
-
 MAGIC_HINT_LINE = "请另起一行输入问题:"
+
+
+def parse_arguments() -> argparse.Namespace:
+    """
+    由于 Python 不允许变量名使用连字符 "-",
+    argparse 会将 log-file 转为 log_file
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--key', help='OpenAI API Key')
+    parser.add_argument('--output', default='./chatgpt.md')
+    parser.add_argument('--log-file', default='./chat.log')
+    parser.add_argument('--log-level', default='info')
+    parser.add_argument('--history', default='./history')
+    parser.add_argument('--proxy', default='127.0.0.1:10809')
+    parser.add_argument('--config', default='./config/config.json')
+    parser.add_argument('--url', default='https://api.openai.com/v1/chat/completions')
+
+    return parser.parse_args()
+
+
+def parse_config_file(args: argparse.Namespace) -> argparse.Namespace:
+    if not os.path.isfile(args.config):
+        return args
+    
+    config_mapping = {
+        "openai_api_key": "key",
+        "output_file": "output",
+        "history_path": "history",
+        "log_file": "log_file",
+        "log_level": "log_level",
+        "proxy": "proxy",
+        "openai_url": "url"
+    }
+
+    # 读取本地配置文件内容
+    with open(args.config, 'r', encoding="utf-8") as f:
+        config = json.load(f)
+
+    for key, value in config.items():
+        if key not in config_mapping.keys():
+            continue
+
+        arg_name = config_mapping[key]
+        setattr(args, arg_name, value)
+
+    return args
 
 
 def file_modified(filepath: str) -> float:
@@ -48,25 +81,25 @@ def file_modified(filepath: str) -> float:
     return st_mtime
 
 
-def clear_file(filepath: str):
+def clear_file(filepath: str, msg: str = MAGIC_HINT_LINE):
     with open(filepath, 'w', encoding="utf-8") as _f:
-        _f.write(f"\n{MAGIC_HINT_LINE}\n")
+        _f.write(f"\n{msg}\n")
 
 
-def save_chat_history(filepath: str, newfilename: str):
+def save_chat_history(filepath: str, new_history_file: str):
     """
     输入参数：
     filepath: 需要操作的文件地址
-    newfilename: 保存的文件名。默认值格式为: 月日_时分_UUID
+    new_history_file: 保存的文件名。默认值格式为: 月日_时分_UUID
     """
-    newpath = os.path.join(HISTORY_DIR, newfilename)
     # 重命名文件并移动到新的地址上
-    os.rename(filepath, newpath)
-    clear_file(filepath)
+    os.rename(filepath, new_history_file)
+    msg = f"{filepath} 中的内容已保存到 {new_history_file}\n{MAGIC_HINT_LINE}"
+    clear_file(filepath, msg)
 
 
-def proxy_test() -> bool:
-    conn = http.client.HTTPSConnection(HTTP_PROXY_SERVER, HTTP_PROXY_PORT, context=ssl._create_unverified_context())
+def proxy_test(proxy: str) -> bool:
+    conn = http.client.HTTPSConnection(host=proxy, context=ssl._create_unverified_context())
     conn.set_tunnel("google.com")  # 设置需要访问的目标服务器
     try:
         conn.request("GET", "/")
@@ -194,11 +227,11 @@ def read_code_block(f: io.BufferedReader, block_type: str) -> str:
     return '\n'.join(lines)
 
 
-def ask_chatgpt(question: str) -> Optional[str]:
+def ask_chatgpt(question: str, config: argparse.Namespace) -> Optional[str]:
     _headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Authorization': f"Bearer {OPENAI_API_KEY}"
+        'Authorization': f"Bearer {config.key}"
     }
     payload = json.dumps({
         "model": "gpt-3.5-turbo",
@@ -210,17 +243,18 @@ def ask_chatgpt(question: str) -> Optional[str]:
         ]
     })
 
-    try:
+    url = urlparse(config.url)
 
+    try:
         # socks.set_default_proxy(socks.SOCKS5, '127.0.0.1', 1088)
         # socket.socket = socks.socksocket
 
         # conn = http.client.HTTPSConnection("api.openai.com")
         # conn.set_tunnel("127.0.0.1", 10808)
         # 创建代理连接对象
-        conn = http.client.HTTPSConnection(HTTP_PROXY_SERVER, HTTP_PROXY_PORT, context=ssl._create_unverified_context())
-        conn.set_tunnel("api.openai.com")  # 设置需要访问的目标服务器
-        conn.request("POST", "/v1/chat/completions", body=payload, headers=_headers)
+        conn = http.client.HTTPSConnection(host=config.proxy, context=ssl._create_unverified_context())
+        conn.set_tunnel(url.hostname)  # 设置需要访问的目标服务器
+        conn.request("POST", url.path, body=payload, headers=_headers)
         res = conn.getresponse()
         _response = res.read().decode()
         _response = json.loads(_response)
@@ -245,7 +279,7 @@ def append_answer(answer: str, output_file: str):
         f.write(f"\n==ANSWER ({format_time_now()})==\n")
         f.write(f"{answer}\n")
         f.write(f"\n{MAGIC_HINT_LINE}\n")
-        logging.info(f"运行成功，请在 {OUTPUT_FILE} 查看结果。")
+        logging.info(f"运行成功，请在 {output_file} 查看结果。")
 
 
 def append_msg_to_file(msg: str, output_file: str):
@@ -254,7 +288,11 @@ def append_msg_to_file(msg: str, output_file: str):
         logging.debug(f"{msg.strip()}")
 
 
-def configure_logging():
+def configure_logging(log_file: str, log_level: str = "INFO"):
+    log_level = log_level.upper()
+    if log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        log_level = "INFO"
+
     logging_config = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -278,7 +316,7 @@ def configure_logging():
                 "class": "logging.handlers.RotatingFileHandler",
                 "level": "INFO",
                 "formatter": "brief",
-                "filename": LOG_FILE,
+                "filename": log_file,
                 "maxBytes": 1024000,
                 "backupCount": 10,
                 "encoding": "utf-8"
@@ -286,7 +324,7 @@ def configure_logging():
 
         },
         "root": {
-            "level": logging.DEBUG,
+            "level": log_level,
             "handlers": ["console", "log_file"]
         },
         "loggers": {
@@ -300,14 +338,16 @@ def configure_logging():
     logging.config.dictConfig(logging_config)
 
 
-def with_chat(question: str, output_file: str):
+def with_chat(question: str, config: argparse.Namespace):
+    output_file = config.output
+
     if question is None or question.isspace() or question == "":
         logging.warning("请输入问题")
         return False
 
     logging.info(f"QUESTION: {question}.")
     append_msg_to_file("正在向 ChatGPT 请教，请耐心等待...\n", output_file)
-    answer = ask_chatgpt(question)
+    answer = ask_chatgpt(question, config)
     # answer = "============ Test ============="
 
     if answer is None:
@@ -317,7 +357,8 @@ def with_chat(question: str, output_file: str):
         append_answer(answer, output_file)
 
 
-def monitor_loop(output_file: str):
+def monitor_loop(config: argparse.Namespace):
+    output_file = config.output
     last_modified = file_modified(output_file)
 
     while True:
@@ -351,38 +392,40 @@ def monitor_loop(output_file: str):
                 logging.warning(f"Save chat history to file failed.")
                 continue
 
-            history_file = cmds[1] if len(cmds) == 2 else f"{format_time_now('%m%d_%H%M')}_{str(uuid.uuid4())[0:6]}"
+            history_file = cmds[1] if len(cmds) == 2 else f"{format_time_now('%Y%m%d_%H%M')}"
+            history_file = os.path.join(config.history, history_file)
             save_chat_history(output_file, history_file)
             continue
 
         logging.debug("File modified!")
-        with_chat(question, output_file)
+        with_chat(question, config)
 
 
 def main():
-    if not os.path.exists(HISTORY_DIR):
-        os.makedirs(HISTORY_DIR)
-    if not os.path.exists(OUTPUT_FILE):
-        with open(OUTPUT_FILE, 'w') as f:
+    
+    args = parse_arguments()
+    config = parse_config_file(args)
+    configure_logging(config.log_file, config.log_level)
+
+    if not os.path.exists(config.history):
+        os.makedirs(config.history)
+    if not os.path.exists(config.output):
+        with open(config.output, 'w') as f:
             f.write(f"Created file by {os.path.abspath(__file__)} in {format_time_now()}")
 
-    configure_logging()
 
-    if not proxy_test():
+    if not proxy_test(config.proxy):
         logging.error("proxy 无法连接，请检查代理连接后重试")
-        append_msg_to_file("proxy 无法连接，请检查代理连接后重试", OUTPUT_FILE)
+        append_msg_to_file("proxy 无法连接，请检查代理连接后重试", config.output)
         return False
 
-    append_msg_to_file(
-        f"proxy 连接正常: http://{HTTP_PROXY_SERVER}:{HTTP_PROXY_PORT}\n{MAGIC_HINT_LINE}\n",
-        OUTPUT_FILE
-    )
+    append_msg_to_file(f"proxy 连接正常: http://{config.proxy}\n{MAGIC_HINT_LINE}\n", config.output)
 
-    logging.warning(f"开始循环监听 {os.path.abspath(OUTPUT_FILE)} 文件")
-    monitor_loop(OUTPUT_FILE)
+    logging.warning(f"开始循环监听 {os.path.abspath(config.output)} 文件")
+    monitor_loop(config)
 
 
 
 if __name__ == '__main__':
     main()
-    # test()
+

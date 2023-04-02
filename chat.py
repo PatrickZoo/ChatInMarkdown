@@ -1,24 +1,28 @@
-# -*- coding: utf-8 -*-
-# @Time    : ${DATE} ${TIME}
-# @Author  : Zheng Daxing
-# @Author  : Zhou Jun
-# @Github  : https://github.com/
-# @Software: ${PRODUCT_NAME}
-# @File    : ${NAME}.py
+# -*- encoding: utf-8 -*-
+# @Author      : Daxing Zheng
+# @Email       : laiguanqixi@gmail.com
+# @Author      : Jun Zhou
+# @Email       :
+# @File        : chat.py
+# @Datetime    : 2023-03-02 09:23:19
+# @Github      : https://github.com/PatrickZoo/ChatInMarkdown
+# @Description :
 
-import os
-import re
-import io
-import time
-import ssl
-import http.client
-import json
 import datetime
-import traceback
+import http.client
+import io
+import json
 import logging
 import logging.config
-
+import os
+import re
+import ssl
+import time
+import traceback
 from typing import List, Optional, Union
+import uuid
+
+
 
 # 读取本地配置文件内容
 with open('./config/config.json', 'r', encoding="utf-8") as f:
@@ -31,10 +35,14 @@ OPENAI_API_KEY = config['OPENAI_API_KEY']
 OUTPUT_FILE = config['OUTPUT_FILE']
 LOG_FILE = config['LOG_FILE']
 HISTORY_DIR = "./history"
-HTTP_PROXY_SERVER = config['proxy_host']  # https代理地址
-HTTP_PROXY_PORT = config['proxy_port']  # https代理端口
+HTTP_PROXY_SERVER = config['PROXY_HOST']  # https代理地址
+HTTP_PROXY_PORT = config['PROXY_PORT']  # https代理端口
 
 IGNORE_QUESTION = ["请另起一行输入问题:", "Runtime Message"]
+
+MAGIC_HINT_LINE = "请另起一行输入问题:"
+
+
 def file_modified(filepath: str) -> float:
     st_mtime = os.stat(filepath).st_mtime
     return st_mtime
@@ -42,22 +50,19 @@ def file_modified(filepath: str) -> float:
 
 def clear_file(filepath: str):
     with open(filepath, 'w', encoding="utf-8") as _f:
-        _f.write("\n请另起一行输入问题:\n")
+        _f.write(f"\n{MAGIC_HINT_LINE}\n")
 
 
-"""
-输入参数：
-filepath：需要操作的文件地址
-newfilename：保存的文件名。默认值为系统当前时间。格式为：年_月_日_时_分
-"""
-
-
-def save_file(filepath: str, newfilename: str = time.strftime("%Y_%m_%d_%H_%M", time.localtime())):
+def save_chat_history(filepath: str, newfilename: str):
+    """
+    输入参数：
+    filepath: 需要操作的文件地址
+    newfilename: 保存的文件名。默认值格式为: 月日_时分_UUID
+    """
     newpath = os.path.join(HISTORY_DIR, newfilename)
     # 重命名文件并移动到新的地址上
     os.rename(filepath, newpath)
-    with open(filepath, 'w', encoding="utf-8") as _f:
-        _f.write("\n请另起一行输入问题:\n")
+    clear_file(filepath)
 
 
 def proxy_test() -> bool:
@@ -71,8 +76,9 @@ def proxy_test() -> bool:
         logging.error(traceback.format_exc())
         return False
 
-def get_time() -> str:
-    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+def format_time_now(format:str = "%Y-%m-%d %H:%M:%S") -> str:
+    return datetime.datetime.now().strftime(format)
 
 
 def clean_question(question: str) -> str:
@@ -88,8 +94,9 @@ def clean_question(question: str) -> str:
     if "Runtime Message" in question:
         return None
 
-    if "请另起一行输入问题:" in question:
-        question = re.sub(r'.*请另起一行输入问题:(.*)', r'\1', question).strip()
+    if MAGIC_HINT_LINE in question:
+        # question = re.sub(r'.*请另起一行输入问题:(.*)', r'\1', question).strip()
+        question = re.sub(rf'.*{MAGIC_HINT_LINE}(.*)', r'\1', question).strip()
         if question == "":
             return None
 
@@ -235,15 +242,15 @@ def ask_chatgpt(question: str) -> Optional[str]:
 
 def append_answer(answer: str, output_file: str):
     with open(output_file, 'a', encoding="utf-8") as f:
-        f.write(f"\n==ANSWER ({get_time()})==\n")
+        f.write(f"\n==ANSWER ({format_time_now()})==\n")
         f.write(f"{answer}\n")
-        f.write("\n请另起一行输入问题:\n")
+        f.write(f"\n{MAGIC_HINT_LINE}\n")
         logging.info(f"运行成功，请在 {OUTPUT_FILE} 查看结果。")
 
 
 def append_msg_to_file(msg: str, output_file: str):
     with open(output_file, 'a', encoding="utf-8") as f:
-        f.write(f"\n==Runtime Message ({get_time()})=={msg}")
+        f.write(f"\n==Runtime Message ({format_time_now()})=={msg}")
         logging.debug(f"{msg.strip()}")
 
 
@@ -332,22 +339,20 @@ def monitor_loop(output_file: str):
             logging.debug("Blank question or runtime message. Ignored")
             continue
 
-        if question == ":clear" or question=="：clear":
+        if question in (":clear", "：clear"):
             logging.debug(f"clear file: {output_file}")
             clear_file(output_file)
             continue
+
         # 有参数
-        if question.split()[0] == ":save" or question.split()[0]=="：save":
-            # 没有指定文件名
-            if len(question.split()) == 1:
-                save_file(output_file)
-            elif len(question.split()) == 2:
-                newfile_name = question.split()[1]
-                save_file(output_file, newfile_name)
-            else:
-                logging.error(f"save file error")
+        if question.startswith((":save", "：save")):
+            cmds = question.split()
+            if len(cmds) not in (1, 2):
+                logging.warning(f"Save chat history to file failed.")
                 continue
-            logging.debug(f"save file: {output_file}")
+
+            history_file = cmds[1] if len(cmds) == 2 else f"{format_time_now('%m%d_%H%M')}_{str(uuid.uuid4())[0:6]}"
+            save_chat_history(output_file, history_file)
             continue
 
         logging.debug("File modified!")
@@ -359,7 +364,7 @@ def main():
         os.makedirs(HISTORY_DIR)
     if not os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, 'w') as f:
-            f.write(f"Created file by {os.path.abspath(__file__)} in {get_time()}")
+            f.write(f"Created file by {os.path.abspath(__file__)} in {format_time_now()}")
 
     configure_logging()
 
@@ -368,10 +373,15 @@ def main():
         append_msg_to_file("proxy 无法连接，请检查代理连接后重试", OUTPUT_FILE)
         return False
 
-    append_msg_to_file(f"proxy 连接正常: http://{HTTP_PROXY_SERVER}:{HTTP_PROXY_PORT}\n请另起一行输入问题:\n",
-                       OUTPUT_FILE)
+    append_msg_to_file(
+        f"proxy 连接正常: http://{HTTP_PROXY_SERVER}:{HTTP_PROXY_PORT}\n{MAGIC_HINT_LINE}\n",
+        OUTPUT_FILE
+    )
+
     logging.warning(f"开始循环监听 {os.path.abspath(OUTPUT_FILE)} 文件")
     monitor_loop(OUTPUT_FILE)
+
+
 
 if __name__ == '__main__':
     main()

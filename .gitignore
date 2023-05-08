@@ -1,6 +1,8 @@
 # Project
 chatgpt.md
 history/
+test*
+.vscode
 
 # macOS
 .DS_Store
